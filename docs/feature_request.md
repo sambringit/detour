@@ -24,7 +24,7 @@ route origin already accepts a heading, reusing it for ranking would be enough.
 
 **Evidence from a public benchmark**
 
-I built a reproducible simulator and benchmark: [repo URL]. It compares nearest-by-distance,
+I built a reproducible simulator and benchmark: https://github.com/sambringit/detour. It compares nearest-by-distance,
 nearest-by-drive-time (heading-blind) and a heading-aware ranking against a ground-truth ETA, using
 noisy GPS (8 m / 10 degrees) and real OpenStreetMap street networks (San Francisco and Helsinki
 extracts), with 95% confidence intervals.
@@ -46,4 +46,4 @@ motivation is personal observation while driving. The repo documents all of this
 Navigation and ride-hailing apps that suggest stops while a vehicle is in motion, where a place just
 behind the vehicle is worse than the number suggests.
 
-[Name / contact]
+[Sam B / sambringit@gmail.com]
