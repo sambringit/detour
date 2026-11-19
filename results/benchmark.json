@@ -1,0 +1,48 @@
+{
+  "nearest_distance": {
+    "ticks": 17946,
+    "mean_regret_s": 6.004012036108325,
+    "p90_regret_s": 24.0,
+    "optimal_pct": 75.1142315836398,
+    "uturn_pct": 20.494817786693414,
+    "avoidable_uturn_pct": 9.578736208625878,
+    "flips_per_min": 0.9322224724161222
+  },
+  "nearest_drive_time": {
+    "ticks": 17946,
+    "mean_regret_s": 3.5516549648946842,
+    "p90_regret_s": 18.0,
+    "optimal_pct": 82.44734202607823,
+    "uturn_pct": 24.33411345146551,
+    "avoidable_uturn_pct": 12.66577510308704,
+    "flips_per_min": 0.7329430308489077
+  },
+  "heading_aware": {
+    "ticks": 17946,
+    "mean_regret_s": 0.4179204279505182,
+    "p90_regret_s": 0.0,
+    "optimal_pct": 95.30814666220886,
+    "uturn_pct": 14.855678145547754,
+    "avoidable_uturn_pct": 3.4770979605483117,
+    "flips_per_min": 0.886061697815807
+  },
+  "heading_aware_hys": {
+    "ticks": 17946,
+    "mean_regret_s": 0.9966566365763958,
+    "p90_regret_s": 0.0,
+    "optimal_pct": 91.81990415691519,
+    "uturn_pct": 18.10431293881645,
+    "avoidable_uturn_pct": 6.435974590437981,
+    "flips_per_min": 0.7757261877955413
+  },
+  "oracle": {
+    "ticks": 17946,
+    "mean_regret_s": 0.0,
+    "p90_regret_s": 0.0,
+    "optimal_pct": 100.0,
+    "uturn_pct": 11.66833834837847,
+    "avoidable_uturn_pct": 0.0,
+    "flips_per_min": 0.7971177662688581
+  },
+  "_map_match_accuracy_pct": 88.30380028975816
+}
