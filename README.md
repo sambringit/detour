@@ -2,6 +2,8 @@
 
 Feature request filed with Google Maps Platform: https://issuetracker.google.com/issues/587838277
 
+Algorithm specification for implementers (pseudocode, complexity, test vectors): [docs/algorithm.md](docs/algorithm.md)
+
 When you ask a map for "the nearest Starbucks" while already driving, the answer is usually ranked by
 how close each place is *right now*. It ignores which way you are heading, so it can suggest a place
 you just passed. This project asks: **how much does it matter, and can a small amount of code fix it?**
