@@ -157,8 +157,9 @@ separately so a flag difference cannot hide behind matching seconds.
 - **What is compared:** the three vectors in `docs/algorithm.md`, `GridWorld(30)` with several target seeds,
   and the real extracts in `data/` (West Oakland, San Francisco, Helsinki), with U-turn penalties 20 s
   (scorer) and 30 s (ground truth). In total 594 `cost_to_go` calls, 2,301,352 states.
-- **Result:** seconds are bit-identical on all 2,301,352 states (not merely within tolerance), the reachable
-  states are identical, and there are no `has_uturn` flag differences.
+- **Result:** on Linux x86_64, seconds are bit-identical on all 2,301,352 states (not merely within
+  tolerance), the reachable states are identical, and there are no `has_uturn` flag differences. The same tests
+  pass on Apple Silicon and in CI on Ubuntu and macOS.
 - **Ties:** the flag depends on which of two equal-cost routes settles first. The C++ copies the Python
   tie-breaking (predecessor order, strict `<`, heap counter order). With penalties 20 s and 30 s exact ties
   between a reversal route and a non-reversal route almost never occur, so a separate test uses penalties
@@ -172,34 +173,38 @@ separately so a flag difference cannot hide behind matching seconds.
 
 ### Timings
 
-Measured with `bench_native.py` on one machine: Linux x86_64 sandbox, 1 shared vCPU (Intel Xeon 2.30 GHz),
-Python 3.12.3, numpy 2.5.5. Medians; Python and C++ runs interleaved; caches cold. Raw data is in
+Measured with `bench_native.py` on one machine: Apple M2 (8 cores), macOS 26.3.1 (arm64), Python 3.10.18,
+numpy 2.2.6. Medians; Python and C++ runs interleaved; caches cold. Raw data is in
 `results/bench_native.json`. **Timings depend on your machine: run `python3 bench_native.py` to get yours.**
 
 `cost_to_go`, one target, uncached, U-turn penalty 20 s (median of 9 repetitions):
 
 | Network | Directed edges | Python | C++ search only | C++ incl. conversion to the dict |
 |---|---:|---:|---:|---:|
-| GridWorld(30) | 3,480 | 5.20 ms | 0.35 ms (14.9x) | 1.15 ms (4.5x) |
-| Helsinki | 2,692 | 2.39 ms | 0.19 ms (12.9x) | 0.61 ms (3.9x) |
-| San Francisco | 20,606 | 32.6 ms | 2.17 ms (15.0x) | 6.53 ms (5.0x) |
+| GridWorld(30) | 3,480 | 6.16 ms | 0.17 ms (36.1x) | 0.71 ms (8.7x) |
+| Helsinki | 2,692 | 2.64 ms | 0.13 ms (20.1x) | 0.53 ms (5.0x) |
+| San Francisco | 20,606 | 27.8 ms | 1.60 ms (17.4x) | 4.62 ms (6.0x) |
 
 The last column is what `RoadNetwork.cost_to_go` returns, so it is the like-for-like speedup. Building the
-native snapshot of a network takes about 2 ms (20 ms for San Francisco) once per network.
+native snapshot of a network takes about 2 ms (15 ms for San Francisco) once per network.
 
 Full evaluation (map matching, scoring, ground truth, statistics; median of 5 repetitions):
 
 | Evaluation | Python | With C++ | Speedup |
 |---|---:|---:|---:|
-| `experiment.run`, GridWorld(30), 20 worlds x 10 drives, 4 scorers | 10.15 s | 5.57 s | 1.8x |
-| `experiment.run_real`, Helsinki, 40 drives, 5 scorers | 4.25 s | 3.74 s | about 1.1x |
+| `experiment.run`, GridWorld(30), 20 worlds x 10 drives, 4 scorers | 11.53 s | 5.95 s | 1.9x |
+| `experiment.run_real`, Helsinki, 40 drives, 5 scorers | 5.13 s | 4.74 s | about 1.1x |
 
 Only `cost_to_go` is accelerated, so the whole-run gain is limited by how much of the run it was: about 54%
-of the Python wall-clock time on the grid, but about 9% on Helsinki, where map matching dominates. The
-Helsinki figure varied between 1.08x and 1.15x across my measurements.
+of the Python wall-clock time on the grid, but about 8% on Helsinki, where map matching dominates. The
+Helsinki gain is small and noisy: 1.00x to 1.11x across the five repetitions.
 
-Tested locally on Linux x86_64 with Python 3.10 and 3.12. CI also builds and tests the extension (see
-`.github/workflows/ci.yml`).
+An earlier run on a shared 1-vCPU Linux x86_64 machine (Xeon 2.30 GHz, Python 3.12) gave smaller `cost_to_go`
+speedups (3.9x to 5.0x including the dict conversion) and 1.8x (grid) and about 1.1x (Helsinki) on the full
+evaluations.
+
+Tested locally on macOS (Apple M2, Python 3.10) and on Linux x86_64 (Python 3.10 and 3.12). CI also builds and
+tests the extension on Ubuntu and macOS (see `.github/workflows/ci.yml`).
 
 ## Layout
 
