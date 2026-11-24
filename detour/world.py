@@ -11,6 +11,8 @@ import random
 from dataclasses import dataclass
 from typing import Hashable, Iterator
 
+from . import native
+
 Node = Hashable
 CELL = 150.0  # spatial-index cell size in meters
 
@@ -34,6 +36,8 @@ class RoadNetwork:
         self._times_cache: dict = {}
         self._ctg_cache: dict = {}
         self._index = None
+        self.use_native = True   # set False to force the pure-Python cost_to_go on this network
+        self._native = None      # lazy NativeGraph snapshot; False = this graph is unsupported
 
     # --- construction ---------------------------------------------------
     def add_node(self, node: Node, x: float, y: float, uturn_ok: bool = True) -> None:
@@ -41,11 +45,13 @@ class RoadNetwork:
         self.out.setdefault(node, {})
         self.inn.setdefault(node, [])
         self.uturn_ok[node] = uturn_ok
+        self._native = None
 
     def add_edge(self, a: Node, b: Node, length: float, speed: float) -> None:
         self.out[a][b] = (length, speed)
         self.inn[b].append(a)
         self._index = None
+        self._native = None
         self._times_cache.clear()
         self._ctg_cache.clear()
 
@@ -148,17 +154,45 @@ class RoadNetwork:
         self._times_cache[target] = best
         return best
 
+    def native_graph(self):
+        """The C++ snapshot of this network, or None when the native path is not in use
+        (extension not built, numpy missing, use_native False, DETOUR_NATIVE=0, or a graph
+        shape it does not model). Never raises."""
+        if not (self.use_native and native.enabled()):
+            return None
+        if self._native is None:
+            try:
+                self._native = native.NativeGraph(self, cache=False)  # we cache below
+            except native.UnsupportedGraph:
+                self._native = False
+        return self._native or None
+
     def cost_to_go(self, target: Node, uturn_penalty: float):
         """Direction-aware fastest time to `target`.
 
         Returns {(u, v): (seconds, route_has_uturn)} where (u, v) means "the car is at v
         and just arrived via the edge u->v". Reversing (v -> u) costs `uturn_penalty`
         extra seconds and is only allowed where uturn_ok[v] (intersections, dead ends).
-        Backward Dijkstra over directed-edge states."""
+        Backward Dijkstra over directed-edge states. Uses the optional C++ implementation
+        when available (identical results, see tests/test_native_parity.py), otherwise the
+        pure-Python one below. Cached per (target, uturn_penalty)."""
         key = (target, uturn_penalty)
         cached = self._ctg_cache.get(key)
         if cached is not None:
             return cached
+        g = None
+        if target in self.inn and native.finite(uturn_penalty):  # else Python raises/handles it
+            ng = self.native_graph()
+            if ng is not None:
+                g = ng.cost_to_go(target, uturn_penalty)
+        if g is None:
+            g = self._cost_to_go_python(target, uturn_penalty)
+        self._ctg_cache[key] = g
+        return g
+
+    def _cost_to_go_python(self, target: Node, uturn_penalty: float):
+        """Reference pure-Python implementation (uncached). Kept as the fallback and as the
+        oracle the native code is tested against."""
         g: dict = {}
         heap: list = []
         k = 0
@@ -185,7 +219,6 @@ class RoadNetwork:
                     g[prev_state] = (c, cur_flag or rev)
                     k += 1
                     heapq.heappush(heap, (c, k, prev_state))
-        self._ctg_cache[key] = g
         return g
 
     def clear_caches(self) -> None:

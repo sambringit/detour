@@ -12,7 +12,7 @@ import pytest
 
 from detour import native
 
-pytestmark = pytest.mark.skipif(not native.available, reason="C++ extension not built")
+pytestmark = pytest.mark.skipif(not native.enabled(), reason="C++ extension not built (or DETOUR_NATIVE=0)")
 
 from detour.drive import simulate_drive  # noqa: E402
 from detour.obs import observe  # noqa: E402
@@ -43,7 +43,7 @@ def check_world(world: RoadNetwork, targets, penalties=PENALTIES) -> int:
     total = 0
     for t in targets:
         for pen in penalties:
-            r = compare(world.cost_to_go(t, pen), g.cost_to_go(t, pen))
+            r = compare(world._cost_to_go_python(t, pen), g.cost_to_go(t, pen))
             ctx = f"target={t!r} penalty={pen}"
             # reachability and seconds first, flag mismatches reported on their own
             assert not r["missing_in_native"] and not r["extra_in_native"], f"reachable states differ: {ctx}"
@@ -138,57 +138,111 @@ def test_real_extract_cost_to_go(real_net):
     assert check_world(net, targets) > 0
 
 
+def _stream_results(net, penalty, obs_stream, native_on):
+    """HeadingAware scores + picks for one Obs stream with the native path on or off."""
+    net.use_native = native_on
+    net.clear_caches()  # drop cached cost_to_go so this run recomputes with the chosen path
+    if native_on:
+        assert net.native_graph() is not None, "native path should be active"
+    else:
+        assert net.native_graph() is None
+    scorer = HeadingAware(penalty)
+    out = [(scorer.scores(net, obs), scorer.pick(net, obs).id) for obs in obs_stream]
+    net.use_native = True
+    return out
+
+
+def _assert_same_rankings(py, nat, label):
+    assert len(py) == len(nat) > 0
+    for (s_py, pick_py), (s_nat, pick_nat) in zip(py, nat):
+        assert s_py.keys() == s_nat.keys()
+        for pid in s_py:
+            assert s_py[pid] == s_nat[pid] or math.isclose(s_py[pid], s_nat[pid], rel_tol=REL_TOL)
+        assert pick_py == pick_nat, f"{label}: ranking pick differs"
+
+
 def test_real_extract_ranking_parity(real_net):
     """Identical Obs streams -> identical HeadingAware scores and picks, Python vs native."""
     name, net = real_net
     net.pois = [POI(i, p.name, p.node, p.x, p.y) for i, p in enumerate(net.pois[:30])]
-    g = native.NativeGraph(net)
-    native_ctg = g.cost_to_go
-    py_ctg = net.cost_to_go
     rng = random.Random(11)
     nodes = sorted(net.pos)
-    compared = 0
     for _ in range(3):
         src, dst = rng.choice(nodes), rng.choice(nodes)
         ticks = simulate_drive(net, src, dst, dt=5.0)[:25]  # cap: map matching is the slow part
-        obs_stream = [observe(tk, rng) for tk in ticks]  # one stream, used by both scorers
+        obs_stream = [observe(tk, rng) for tk in ticks]  # one stream, used by both runs
         for pen in PENALTIES:
-            py_scorer, nat_scorer = HeadingAware(pen), HeadingAware(pen)
-            for obs in obs_stream:
-                s_py = py_scorer.scores(net, obs)
-                pick_py = py_scorer.pick(net, obs).id
-                net.cost_to_go = native_ctg  # scorer calls world.cost_to_go: swap in native
-                try:
-                    s_nat = nat_scorer.scores(net, obs)
-                    pick_nat = nat_scorer.pick(net, obs).id
-                finally:
-                    net.cost_to_go = py_ctg
-                assert s_py.keys() == s_nat.keys()
-                for pid in s_py:
-                    assert math.isclose(s_py[pid], s_nat[pid], rel_tol=REL_TOL) or s_py[pid] == s_nat[pid]
-                assert pick_py == pick_nat, f"{name}: ranking pick differs"
-                compared += 1
-    assert compared > 0
+            _assert_same_rankings(_stream_results(net, pen, obs_stream, False),
+                                  _stream_results(net, pen, obs_stream, True), name)
 
 
 def test_ranking_parity_on_grid_world():
     w = GridWorld(n=30)
     w.add_pois(12, seed=3)
-    g = native.NativeGraph(w)
     rng = random.Random(5)
+    nodes = sorted(w.pos)
     for _ in range(4):
-        src, dst = rng.choice(sorted(w.pos)), rng.choice(sorted(w.pos))
+        src, dst = rng.choice(nodes), rng.choice(nodes)
         if src == dst:
             continue
-        for obs in [observe(tk, rng) for tk in simulate_drive(w, src, dst, dt=4.0)[:30]]:
-            for pen in PENALTIES:
-                a = HeadingAware(pen)
-                s_py, pick_py = a.scores(w, obs), a.pick(w, obs).id
-                orig = w.cost_to_go
-                w.cost_to_go = g.cost_to_go
-                try:
-                    s_nat, pick_nat = a.scores(w, obs), a.pick(w, obs).id
-                finally:
-                    w.cost_to_go = orig
-                assert pick_py == pick_nat
-                assert all(math.isclose(s_py[k], s_nat[k], rel_tol=REL_TOL) or s_py[k] == s_nat[k] for k in s_py)
+        obs_stream = [observe(tk, rng) for tk in simulate_drive(w, src, dst, dt=4.0)[:30]]
+        for pen in PENALTIES:
+            _assert_same_rankings(_stream_results(w, pen, obs_stream, False),
+                                  _stream_results(w, pen, obs_stream, True), "grid")
+
+
+# --- the wiring in RoadNetwork itself ---------------------------------------------------------
+def test_roadnetwork_uses_native_and_returns_same_type_as_python():
+    w = GridWorld(n=8)
+    assert w.native_graph() is not None
+    got = w.cost_to_go((3, 3), 20.0)
+    assert got is w.cost_to_go((3, 3), 20.0)  # cached per (target, penalty), same object
+    ref = w._cost_to_go_python((3, 3), 20.0)
+    assert got == ref  # exact equality: same keys, same floats, same bools
+    k = next(iter(got))
+    assert type(got[k][0]) is float and type(got[k][1]) is bool
+
+
+def test_use_native_false_and_env_switch_fall_back(monkeypatch):
+    w = GridWorld(n=6)
+    w.use_native = False
+    assert w.native_graph() is None
+    assert w.cost_to_go((2, 2), 20.0) == w._cost_to_go_python((2, 2), 20.0)
+    w2 = GridWorld(n=6)
+    monkeypatch.setenv("DETOUR_NATIVE", "0")
+    assert not native.enabled() and w2.native_graph() is None
+    monkeypatch.setenv("DETOUR_NATIVE", "1")
+    assert native.enabled() and w2.native_graph() is not None
+
+
+def test_adding_edges_or_nodes_invalidates_the_snapshot():
+    w = _street()
+    before = w.cost_to_go(3, 20.0)
+    assert w.native_graph() is not None
+    w.add_node(4, 400.0, 0.0)
+    w.add_edge(3, 4, 100.0, 10.0)
+    w.add_edge(4, 3, 100.0, 10.0)
+    assert w._native is None and not w._ctg_cache  # snapshot and cache both dropped
+    after = w.cost_to_go(4, 20.0)
+    assert after == w._cost_to_go_python(4, 20.0) and (3, 4) in after
+    assert (3, 4) not in before and (3, 4) in w.cost_to_go(3, 20.0)  # new edge is visible
+
+
+def test_unsupported_graphs_fall_back_to_python():
+    w = RoadNetwork()
+    for i in range(3):
+        w.add_node(i, 100.0 * i, 0.0)
+    w.add_edge(0, 1, 100.0, 10.0)
+    w.add_edge(1, 0, 100.0, 10.0)
+    w.add_edge(1, 2, 100.0, 0.0)  # zero speed: Python only fails if this edge is ever relaxed
+    assert w.native_graph() is None
+    assert w._native is False  # remembered, not retried on every call
+    assert w.cost_to_go(0, 20.0) == w._cost_to_go_python(0, 20.0)
+
+
+def test_unknown_target_and_nonfinite_penalty_keep_python_behaviour():
+    w = GridWorld(n=4)
+    with pytest.raises(KeyError):
+        w.cost_to_go("nope", 20.0)
+    inf = float("inf")
+    assert w.cost_to_go((1, 1), inf) == w._cost_to_go_python((1, 1), inf)

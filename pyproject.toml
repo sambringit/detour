@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "pybind11>=2.12"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.optional-dependencies]
+native = ["numpy>=1.21"]  # needed to RUN the optional C++ core (see README)
 figures = ["matplotlib>=3.7"]
 dev = ["pytest>=7", "matplotlib>=3.7"]
 pbf = ["osmium>=4"]

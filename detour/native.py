@@ -6,6 +6,9 @@ NativeGraph snapshots a RoadNetwork into dense arrays. Edge ids follow inn[] ord
 is the same order as in the Python code."""
 from __future__ import annotations
 
+import math
+import os
+
 try:
     import numpy as np
 
@@ -14,7 +17,20 @@ except ImportError:  # no numpy or extension not built: pure-Python path is used
     np = None
     _ctg = None
 
-available = _ctg is not None
+available = _ctg is not None  # extension + numpy importable
+
+
+def enabled() -> bool:
+    """Native path usable right now? Set the environment variable DETOUR_NATIVE=0 to force
+    the pure-Python code everywhere (handy for debugging and for timing comparisons)."""
+    return available and os.environ.get("DETOUR_NATIVE", "1").strip().lower() not in ("0", "false", "no", "off")
+
+
+def finite(x) -> bool:
+    try:
+        return math.isfinite(float(x))
+    except (TypeError, ValueError):
+        return False
 
 
 class UnsupportedGraph(ValueError):
@@ -22,7 +38,9 @@ class UnsupportedGraph(ValueError):
 
 
 class NativeGraph:
-    def __init__(self, net):
+    def __init__(self, net, cache: bool = True):
+        """cache=False when the owner (RoadNetwork) already caches results per target."""
+        self._use_cache = cache
         if not available:
             raise ImportError("detour._ctg is not built")
         self.node_index = {n: i for i, n in enumerate(net.pos)}
@@ -34,9 +52,15 @@ class NativeGraph:
                 raise UnsupportedGraph(f"parallel edges into node {b!r}")
             for a in preds:
                 length, speed = net.out[a][b]
+                try:
+                    t = length / speed  # same expression as Python: bit-identical
+                except ZeroDivisionError:
+                    raise UnsupportedGraph(f"zero speed on edge {a!r}->{b!r}") from None
+                if not math.isfinite(t):  # Python would store inf/nan states; keep that path
+                    raise UnsupportedGraph(f"non-finite travel time on edge {a!r}->{b!r}")
                 edge_from.append(self.node_index[a])
                 edge_to.append(self.node_index[b])
-                edge_time.append(length / speed)  # same expression as Python: bit-identical
+                edge_time.append(t)
                 self.edge_key.append((a, b))
             in_off.append(len(edge_from))
         if len(edge_from) != sum(len(v) for v in net.out.values()):
@@ -60,14 +84,16 @@ class NativeGraph:
     def cost_to_go(self, target, uturn_penalty: float) -> dict:
         """Same return type as RoadNetwork.cost_to_go: {(u, v): (seconds, has_uturn)}. Cached."""
         key = (target, uturn_penalty)
-        hit = self._cache.get(key)
-        if hit is not None:
-            return hit
+        if self._use_cache:
+            hit = self._cache.get(key)
+            if hit is not None:
+                return hit
         cost, flag = self.cost_to_go_arrays(target, uturn_penalty)
         ids = np.flatnonzero(np.isfinite(cost)).tolist()
         sec = cost[ids].tolist()
         fl = flag[ids].astype(bool).tolist()
         ek = self.edge_key
         out = {ek[i]: (s, f) for i, s, f in zip(ids, sec, fl)}
-        self._cache[key] = out
+        if self._use_cache:
+            self._cache[key] = out
         return out
