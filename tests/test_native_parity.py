@@ -19,7 +19,7 @@ from detour.obs import observe  # noqa: E402
 from detour.osm import load_osm  # noqa: E402
 from detour.scorers import HeadingAware  # noqa: E402
 from detour.world import POI, GridWorld, RoadNetwork  # noqa: E402
-from tests.test_spec_vectors import _ring, _street  # noqa: E402
+from test_spec_vectors import _ring, _street  # noqa: E402  (sibling test module; works under plain `pytest`)
 
 DATA = Path(__file__).resolve().parent.parent / "data"
 PENALTIES = (20.0, 30.0)  # scorer belief, ground truth (truth.UTURN_PENALTY)

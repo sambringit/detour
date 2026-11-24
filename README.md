@@ -104,7 +104,7 @@ What the real-road runs show:
 
 ```bash
 pip install -e ".[dev]"
-pytest -q            # 30 tests
+pytest -q            # 33 tests (+24 parity tests when the optional C++ core is built)
 ./reproduce.sh       # rebuilds every number and figure (~5 min on 2 cores)
 ```
 
@@ -118,11 +118,96 @@ python3 run_real.py --osm data/mine.osm.gz --tag "amenity=fuel" --name "Gas stat
 
 `--tag` takes `key=value`, or `key=~text` for a case-insensitive substring match.
 
+## C++ core (optional)
+
+The hot routine, `RoadNetwork.cost_to_go` (the backward Dijkstra over directed-edge states described in
+`docs/algorithm.md`), has an optional C++17 implementation bound with pybind11 (`cpp/ctg.cpp`,
+`detour/native.py`). It is a drop-in speedup: same inputs, same `{(u, v): (seconds, has_uturn)}` result,
+same per-target caching. The simulator, OSM loading, map matching, scoring and plotting stay in Python.
+If the extension is not built, the pure-Python code runs and nothing else changes.
+
+### Build
+
+```bash
+pip install -e ".[native]"        # builds the extension if a C++17 compiler is available (+ numpy)
+python3 -c "from detour import native; print(native.enabled())"   # True = the C++ path is active
+```
+
+You need a C++17 compiler (g++ or clang; on macOS run `xcode-select --install`). pybind11 is fetched
+automatically at build time and numpy is needed at run time. Without a compiler the install still succeeds
+and detour uses the Python code. Switches:
+
+| Setting | Effect |
+|---|---|
+| `DETOUR_NATIVE=0` (environment, at run time) | force the pure-Python `cost_to_go` |
+| `net.use_native = False` | same, for one network |
+| `DETOUR_NO_NATIVE=1` (at install time) | do not build the extension |
+| `DETOUR_REQUIRE_NATIVE=1` (at install time) | make a failed extension build an error (used in CI) |
+
+The C++ path steps aside automatically (the Python code runs) for graphs it does not model identically:
+parallel edges, zero speed, non-finite travel times.
+
+### Parity with the Python code
+
+The aim is identical results, not just close ones. `tests/test_native_parity.py` (skipped when the
+extension is not built) compares the C++ and Python `cost_to_go` on every reachable state and checks that the
+same states are reachable. Seconds are compared with `rel_tol=1e-9`; `has_uturn` flags are checked
+separately so a flag difference cannot hide behind matching seconds.
+
+- **What is compared:** the three vectors in `docs/algorithm.md`, `GridWorld(30)` with several target seeds,
+  and the real extracts in `data/` (West Oakland, San Francisco, Helsinki), with U-turn penalties 20 s
+  (scorer) and 30 s (ground truth). In total 594 `cost_to_go` calls, 2,301,352 states.
+- **Result:** seconds are bit-identical on all 2,301,352 states (not merely within tolerance), the reachable
+  states are identical, and there are no `has_uturn` flag differences.
+- **Ties:** the flag depends on which of two equal-cost routes settles first. The C++ copies the Python
+  tie-breaking (predecessor order, strict `<`, heap counter order). With penalties 20 s and 30 s exact ties
+  between a reversal route and a non-reversal route almost never occur, so a separate test uses penalties
+  of 0, 12 and 24 s on the grid, where they are common. Breaking the tie-breaking in the C++ on purpose
+  (`<=` instead of `<`, or reversed predecessor order) makes that test fail on `has_uturn` flag
+  mismatches (hundreds on the first target it checks) while seconds still match, so the test does detect
+  the problem.
+- **End to end:** `HeadingAware` scores and picks are identical on the same noisy observation streams with
+  the C++ path on and off (542 query points over the grid and the three extracts), and a full Helsinki
+  `run_real` evaluation returns identical metrics. No published number changes.
+
+### Timings
+
+Measured with `bench_native.py` on one machine: Linux x86_64 sandbox, 1 shared vCPU (Intel Xeon 2.30 GHz),
+Python 3.12.3, numpy 2.5.5. Medians; Python and C++ runs interleaved; caches cold. Raw data is in
+`results/bench_native.json`. **Timings depend on your machine: run `python3 bench_native.py` to get yours.**
+
+`cost_to_go`, one target, uncached, U-turn penalty 20 s (median of 9 repetitions):
+
+| Network | Directed edges | Python | C++ search only | C++ incl. conversion to the dict |
+|---|---:|---:|---:|---:|
+| GridWorld(30) | 3,480 | 5.20 ms | 0.35 ms (14.9x) | 1.15 ms (4.5x) |
+| Helsinki | 2,692 | 2.39 ms | 0.19 ms (12.9x) | 0.61 ms (3.9x) |
+| San Francisco | 20,606 | 32.6 ms | 2.17 ms (15.0x) | 6.53 ms (5.0x) |
+
+The last column is what `RoadNetwork.cost_to_go` returns, so it is the like-for-like speedup. Building the
+native snapshot of a network takes about 2 ms (20 ms for San Francisco) once per network.
+
+Full evaluation (map matching, scoring, ground truth, statistics; median of 5 repetitions):
+
+| Evaluation | Python | With C++ | Speedup |
+|---|---:|---:|---:|
+| `experiment.run`, GridWorld(30), 20 worlds x 10 drives, 4 scorers | 10.15 s | 5.57 s | 1.8x |
+| `experiment.run_real`, Helsinki, 40 drives, 5 scorers | 4.25 s | 3.74 s | about 1.1x |
+
+Only `cost_to_go` is accelerated, so the whole-run gain is limited by how much of the run it was: about 54%
+of the Python wall-clock time on the grid, but about 9% on Helsinki, where map matching dominates. The
+Helsinki figure varied between 1.08x and 1.15x across my measurements.
+
+Tested locally on Linux x86_64 with Python 3.10 and 3.12. CI also builds and tests the extension (see
+`.github/workflows/ci.yml`).
+
 ## Layout
 
 ```
 detour/            world.py (directed road network, direction-aware routing), osm.py (OSM loader),
                    matching.py (single-fix + track-aware), scorers.py, truth.py, evaluate.py, ...
+cpp/ctg.cpp        optional C++ cost_to_go, built by setup.py (see "C++ core (optional)")
+bench_native.py    times Python vs C++ (writes results/bench_native.json)
 run_*.py           benchmarks (grid, sweeps, real roads)      make_*.py   figures
 fetch_osm.py       download an area from OpenStreetMap        tools/      PBF -> OSM XML
 docs/              feature request draft for the Google Maps Platform Issue Tracker
