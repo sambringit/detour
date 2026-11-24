@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 data/*/*.osm
 data/*.osm.gz
+detour/_ctg*.so
+detour/_ctg*.pyd
+build/
