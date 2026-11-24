@@ -1,8 +1,13 @@
 name: tests
 on: [push, pull_request]
 jobs:
+  # Pure-Python job (unchanged apart from DETOUR_NO_NATIVE): proves everything works with no
+  # compiled code. The runner has a compiler and matplotlib brings numpy, so without
+  # DETOUR_NO_NATIVE the optional C++ extension would be built and used here.
   pytest:
     runs-on: ubuntu-latest
+    env:
+      DETOUR_NO_NATIVE: "1"
     strategy:
       matrix:
         python: ["3.10", "3.12"]
@@ -12,3 +17,29 @@ jobs:
         with: { python-version: "${{ matrix.python }}" }
       - run: pip install -e ".[dev]"
       - run: pytest -q
+
+  # Builds the optional C++ core and runs the whole suite with it, including the parity tests.
+  # DETOUR_REQUIRE_NATIVE makes a failed build an error, so this job cannot pass by silently
+  # falling back to pure Python.
+  native:
+    runs-on: ${{ matrix.os }}
+    env:
+      DETOUR_REQUIRE_NATIVE: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.10" }
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: macos-latest, python: "3.12" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: pip install -e ".[dev,native]"
+      - name: Check the C++ path is really active
+        run: python -c "from detour import native; assert native.enabled(), 'extension not active'; print('native active')"
+      - name: Full test suite with the C++ core (includes tests/test_native_parity.py)
+        run: pytest -q
+      - name: Same suite with the C++ core switched off at run time
+        run: DETOUR_NATIVE=0 pytest -q
